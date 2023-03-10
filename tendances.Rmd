@@ -1,0 +1,146 @@
+Notre série temporelle ne semble à première vue pas comporter de composante tendancielle. Néanmoins, en zoomant sur sa figure, on observe des intervalles sur lesquelles elle admet des tendances locales. L'objet de cette partie sera donc d'extraire ces tendances locales.
+Nous allons faire appel à plusieurs méthodes pour annalyser la tendance et la saisonnalité. Parmi ces méthodes, nous nous intéresserons à la regression linéaire, la moyenne mobile, la convolution avec un noyau gaussien, la regression sur une base de splines, la regression par polynômes locaux.
+
+Pour prédire nos données à l'aides de modèles, il faut d'abord que l'on sépare notre série temporelle en deux parties. Une partie utilisée pour l'entraînement des modèles, et une utilisée pour déterminer leur efficacité.
+
+```{r}
+n <- length(Date_air)
+n.train = as.integer(70*n/100)
+X.train = X[1:n.train]
+X.test = X[(n.train+1):n]
+X <- X.train
+Date_air.train = Date_air[1:n.train]
+```
+
+### Régression linéaire
+
+
+
+```{r lm, fig.height=2, fig.align='center', fig.cap="\\label{fig:lm} Régression linéaire"}
+t <- c(1:n.train)
+
+reg.1 <- lm(X~t)
+reg.2 <- lm(X~t+I(t^2))
+reg.3 <- lm(X~t+I(t^2)+I(t^3))
+reg.4 <- lm(X~t+I(t^2)+I(t^3)+I(t^4))
+reg.5 <- lm(X~t+I(t^2)+I(t^3)+I(t^4)+I(t^5))
+
+y.chap.lm.1 <- xts(reg.1$fitted, order.by = Date_air.train)
+y.chap.lm.2 <- xts(reg.2$fitted, order.by = Date_air.train)
+y.chap.lm.3 <- xts(reg.3$fitted, order.by = Date_air.train)
+y.chap.lm.4 <- xts(reg.4$fitted, order.by = Date_air.train)
+y.chap.lm.5 <- xts(reg.5$fitted, order.by = Date_air.train)
+```
+```{r, include=FALSE}
+plot(X)
+lines(y.chap.lm.1, col='red')
+lines(y.chap.lm.2, col='blue')
+lines(y.chap.lm.3, col='violet')
+lines(y.chap.lm.4, col='green')
+```
+```{r lm_fig, echo=FALSE, fig.height=2, fig.align='center', fig.cap="\\label{fig:lm_fig} Régression linéaire ; d°1:rouge, d°2:bleu, d°3:violet, d°4:vert, d°5:jaune"}
+lines(y.chap.lm.5, col='yellow')
+#legend(x=0, y=0, legend=c("ordre 1", "ordre 2", "ordre 3", "ordre 4", "ordre 5"), col=c("red", "blue", "violet", "green", "yellow"), lty=1:5, cex=0.8)
+```
+
+On observe sur la figure \ref{fig:lm_fig} que la régression linéaire sur les droites nous affichent une pente quasi nulle devant l'amplitude des données. Pour l'ordre 2, on remarque qu'il y a un léger comportement convexe sur les données.
+
+La régression à l'ordre 4 semble bien capturer le comportement basse-fréquence de la série, sans montrer d'abérration comme le fait le modèle d'ordre 5 vers la fin du graphe, en remontant. Pour éviter le surapprentissage, un modèle à l'ordre 4 semble raisonnable.
+
+En soustrayant à X la tendance estimée, on obtient un signal qui est bien centré en 0.
+
+```{r X.detrend.lm, echo=FALSE, fig.height=2, fig.align='center', fig.cap="\\label{fig:X.detrend.lm} X.detrend lm"}
+plot(X-y.chap.lm.4)
+```
+
+### Moyenne mobile
+
+La moyenne mobile peut être utilisée pour capter la tendance de notre série. Notre série étant périodique de période 24h, il sera important d'ajuster la fenêtre correctement pour filtrer la saisonnalité.
+
+
+```{r}
+l <- 24
+MA.trend <- stats::filter(X, filter=array(1/l,dim=l),
+                  method = c("convolution"),
+                  sides = 2, circular = F)
+MA.trend <- xts(MA.trend, order.by=Date_air.train)
+X.detrend <- X - MA.trend
+```
+```{r, include=FALSE}
+plot(X)
+```
+```{r, ma, echo=FALSE, fig.height=2, fig.align='center', fig.cap="\\label{fig:ma} Moyenne mobile de fenêtre l=24"}
+lines(MA.trend, col='red')
+```
+
+L'utilisation de la moyenne mobile calcule une tendance avec des fréquences beaucoup plus hautes et semble tout de même. Néamoins, la série corrigée de la tendance reste bien centrée.
+
+### Convolution sur un noyau gaussien
+
+```{r }
+h<-10000
+
+x<-seq(1,max(t),length=n.train)
+
+noyau <- function(x){dnorm(x-t,0,sd=sqrt(h/2))/sum(dnorm(x-t,0,sd=sqrt(h/2)))}
+
+W<-matrix(unlist(lapply(x,noyau)),ncol=n.train,nrow=n.train,byrow=F)
+
+ychap.kernel<-colSums(as.numeric(X)*W)
+ychap.kernel<-xts(ychap.kernel,order.by=Date_air.train)
+```
+```{r, include=FALSE}
+plot(X,type='l')
+```
+
+```{r kernel, echo=FALSE, fig.height=2, fig.align='center', fig.cap="\\label{fig:kernel} Noyau gaussien, fenêtre h=10000"}
+lines(ychap.kernel,col='red')
+```
+
+L'utilisation du noyau gaussien avec un paramètre h raisonnable semble donner un bon compromis entre la moyenne mobile de fenêtre 24, et la régression linéaire.
+
+
+### Régression sur base de splines
+
+```{r Bases de splines, include=TRUE}
+g <- gam(X~s(t, k=5))
+ychap.gam<-xts(g$fitted,order.by=Date_air.train)
+```
+```{r, include=FALSE}
+plot(X,type='l')
+```
+
+```{r splines, echo=FALSE, fig.height=2, fig.align='center', fig.cap="\\label{fig:splines} Base de splines, k=5"}
+lines(ychap.gam,col='red')
+```
+
+La régression sur la base de spline montre un très bon résultat, les basses fréquences ont bien été extraites du signal.
+
+
+### Régression par polynômes locaux
+
+```{r Polynômes locaux,include=TRUE}
+X <- xts(X,order.by=Date_air.train)
+lo <- loess(X~t, degree=2, span=0.7)
+ychap.lo <- xts(lo$fitted,order.by=Date_air.train)
+```
+
+```{r, include=FALSE}
+plot(X,type='l')
+```
+
+```{r polynoms, echo=FALSE, fig.height=2, fig.align='center', fig.cap="\\label{fig:polynoms} Polynômes locaux"}
+lines(ychap.lo,col='red')
+```
+
+Un degré adapté pour les polynômes locaux nous permet aussi d'extraire les basses fréquences du signal.
+
+
+On choisira finalement arbitrairement de modéliser la tendance de la série à l'aide de sa décomposition sur la base de splines. 
+
+
+Le signal ainsi corrigé est le suivant :
+```{r splines.center, echo=FALSE, fig.height=2, fig.align='center', fig.cap="\\label{fig:splines.center} Signal centré"}
+X.detrend = X - ychap.gam
+plot(X.detrend)
+```

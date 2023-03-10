@@ -1,0 +1,30 @@
+La prédiction sur un jeu de données tests va permettre d'évaluer les modèles. On procèdera ici à la prédiction par le modèle ARMA calculé précédemment, mais aussi à un modèle de prédiction par lissage exponentiel.
+
+## Modèle ARMA
+
+```{r ARMA.predict}
+n.test = n - n.train
+arma.forecast <- predict(model, n.ahead = n.test, se.fit =F)
+plot(arma.forecast)
+plot(X.detrend.diff,xlim=c(1,nrow(data)+n.test))
+```
+
+Les problèmes que l'on a eu avec le modèle ARMA du résidu se répercutent ici...
+
+
+## Lissage exponentiel
+
+```{r SES, fig.height=2}
+ses.model <- forecast::ses(X.train, alpha=0.99, h=n.test)
+forecast.ses <- forecast::forecast(ses.model, n.test)
+par(mfrow=c(1, 2))
+plot(forecast.ses, ylim=c(-3, 3))
+plot(X.detrend.diff)
+```
+Le lissage exponentiel donne une estimation à l'ordre 0 des données.
+
+
+## Inversion
+
+Une fois que le résidu a été prédit avec un bon modèle, il ne resterait plus qu'à inverser les étapes de stationnarisation.
+En appliquant l'inverse de la différentiation de période 24, à l'aide de la fonction $invdiff$, puis en ajoutant la composante saisonnière prédite sur lintervalle choisi. Il ne resterait alors plus qu'à dénormaliser en mumtipliant par la déviation standard et en ajoutant la moyenne.

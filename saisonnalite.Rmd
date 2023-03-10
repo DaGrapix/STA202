@@ -1,0 +1,89 @@
+Pour étudier la saisonnalité de nos données nous allons regarder l'autocorélogramme de notre série.
+
+```{r,include=TRUE}
+Acf(X.detrend,lag.max=200)
+```
+
+L'oscillation de l'ACF avec des pics réguliers toutes les 24h (et même 12h) montre l'existence d'une saisonnalité journalière dans nos données.
+L'existance de cette saisonnalité dément la stationnarité de la série temporelle. Ceci est d'autant plus justifié qu'il n'y a pas de décroissance exponentielle.
+Ceci peut également être vérifié en utilisant le test ADF (Augmented Dickey-Fuller), qui teste l'hypothèse nulle suivante : 
+$$(H_0): \text{La série temporelle est non stationnaire}$$
+Le test ADF affiche une p-value de 0.99, ce qui est bien au dessus de 0.05. On ne peut donc pas rejeter l'hypothèse nulle.
+La série temporelle est donc non stationnaire.
+
+```{r adf, results=FALSE}
+adf.test(X.detrend)
+```
+### Extraction de la saisonnalité par décomposition en série de fourier
+
+On effectue une régression linéaire sur une base de fourier associée à la pulsation de fréquence 1/24.
+L'affichage de la figure \ref{fig:saisonnalite} montre bien un signal périodique, qui semble représenter la saisonnalité de la série temporelle.
+Néanmoins, l'amplitude de ce signal est relativement faible, ce qui contredit l'analyse que l'on a fait de l'ACF...
+
+```{r, include=TRUE}
+w=2*pi/24
+fourier<-cbind(cos(w*t), sin(w*t))
+K<-30
+for(i in c(2:K))
+{
+  fourier<-cbind(fourier,cos(i*w*t), sin(i*w*t))
+}
+
+reg<-lm(X.detrend~fourier[,1:K]-1)
+ychap.lm.season<-xts(as.numeric(reg$fitted),order.by=Date_air.train)
+```
+```{r, fig.keep=2, include=FALSE}
+par(mfrow=c(1,1))
+plot(X.detrend, type='l', subset="2004-03-10 18:00:00 CET/2004-04-10 18:00:00 CET", ylim=c(-3, 4))
+plot(ychap.lm.season, type='l', subset="2004-03-10 18:00:00 CET/2004-04-10 18:00:00 CET", ylim=c(-3, 4), col='red')
+```
+
+Le résidu devient finalement le suivant.
+```{r residu, echo=FALSE, fig.height=2, fig.align='center', fig.cap="\\label{fig:residu} Résidu"}
+X.res <- X.detrend - ychap.lm.season
+plot(X.res)
+```
+
+### Différentiation
+
+Plutôt que d'utiliser la méthode précédente pour éliminer la saisonnalité, nous allons procéder à une différentiation.
+
+On va pouvoir se rapprocher d'un comportement stationnaire être atteinte en différenciant la série temporelle.
+La saisonnalité journalière nous pousse ainsi à différencier nos données avec un lag de 24 via l'opérateur $1-L^{24}$.
+Nous affichons maintenant l'autocorrélogramme de notre série différenciée :
+
+```{r , include=TRUE}
+X.detrend.diff <- na_mean(diff(X.detrend, lag=24, differences=1))
+```
+
+On obtient un graphique satisfaisant avec une décroissance vers zéro, mais cette décroissance est très lente...
+On souhaite maintenant déduire les plages de paramètres possibles pour un modèle $ARMA(p,q)$ du résidu.
+Pour ce faire, on étudie l'autocorrélogramme et l'autocorrélogramme partiel de la série différenciée.
+
+```{r,include=TRUE}
+par(c(1, 2))
+Acf(X.detrend.diff,lag.max=50)
+Pacf(X.detrend.diff, lag.max=50)
+```
+
+On va donc modéliser notre résidu par un modèle ARMA. Il nous reste à choisir les paramètres p et q.
+Pour le paramètre, on note que l'autocorrélogramme partiel possède un pic au lag=1,2,3 qui sont significatifs. Il y a également des pics significatifs entre 20 et 25 mais le nombre de pics non significatifs avant ces lags nous fait penser que l'on peut se restreindre aux 3 premiers, c'est à dire pmax=3.
+L'étude de l'autocorrélogramme nous apporte moins d'informations car les pics sont significatifs jusqu'aux lags 40 au moins. Cependant, les pics décroissent exponentiellement jusq'au lag 20, on peut donc penser prendre qmax=20. Il nous faut ensuite tester tous les modèles et choisir le meilleur selon le critère AIC.
+En suivant cette méthodologie, c'est le modèle ARMA(3, 0, 20) qui possède le plus faible AIC parmis l'ensemble des modèles calculés, avec un AIC de 8115.5.
+
+```{r, include=FALSE}
+AIC.P.Q <- NULL
+for (p in 1:3){
+  for (q in 1:20){
+    #model <- arima(X.detrend.diff, order = c(p, 0, q), method=c("CSS-ML"))
+    #AIC.P.Q <- c(AIC.P.Q, c(p, q, model$aic))
+    #print(c(p, q, model$aic))
+  }
+}
+
+
+model <- arima(X.detrend.diff, order = c(3, 0, 20))
+checkresiduals(model)
+```
+
+Bien que le résidu semble être gaussien, le test de Ljung-Box nous indique que ce n'est pas le cas. Ceci est sûrement du à la persistance de la saisonnalité, qui malgré une différentiation (et même plus lors de nos tests), semble ne pas vouloir disparaître.

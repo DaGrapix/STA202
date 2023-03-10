@@ -1,0 +1,255 @@
+---
+title: "STA202 - Séries temporelles"
+subtitle: "Rapport de projet"
+author: "Anthony Kalaydjian - Mathieu Occhipinti"
+output:
+  pdf_document:
+    fig_caption: yes
+    number_sections: yes
+    toc: no
+    keep_tex: yes
+  html_document:
+    df_print: paged
+    theme: united
+    fig_caption: yes
+    number_sections: yes
+    toc: yes
+header-includes:
+  \usepackage{float}
+  \usepackage{graphicx}
+  \floatplacement{figure}{H}
+date: "2023-03-02"
+always_allow_html: true
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{=tex}
+\newpage
+\thispagestyle{empty}
+```
+\mbox{}
+
+\tableofcontents
+
+```{=tex}
+\newpage
+\thispagestyle{empty}
+```
+\mbox{}
+
+```{r setup, include=FALSE}
+setwd("F:/Documents/STA202-Project")
+knitr::opts_chunk$set(echo = TRUE)
+library(xts)
+library(tidyr)
+library(imputeTS)
+library(dygraphs)
+library(xtable)
+library(corrplot)
+library(forecast)
+library(urca)
+library(pracma)
+library(aTSA)
+library(mgcv)
+
+rm(list=ls())
+```
+
+# Introduction
+
+Au cours du dernier siècle, l'aggravation de la situation écologique a conduit à une prise de conscience de l'importance de la qualité de l'air.
+Ainsi, la concentration de certains gaz dans l'air a été étudiée de manière approfondie afin de comprendre les effets de la pollution sur l'environnement et la santé humaine.
+Les effets néfastes de la pollution sont par exemple visibles auprès des joueurs d'échecs, dont les performances diminuent lorsque la qualité de l'air de leur environnement diminue.
+
+On s'intérèsse ainsi, dans ce document, à l'étude de l'évolution de la concentration de certains gaz dans l'air au cours du temps.
+Les données que nous allons utiliser proviennent d'une banque de datasets mis à disposition par l'université d'Irvine en Californie.
+Elles comportent ainsi les mesures de la concentration de certains gaz dans une ville d'Italie, sur une période de 1 an et avec un pas de 1h00.
+
+# Prétraitement et mise en forme des données
+
+## Prétraitement et gestion des données manquantes
+
+Comme expliqué précédemment, les données que nous allons utiliser et qui sont consignées dans un fichier .csv représentent l'évolution de la concentration de certains gaz au cours du temps.
+Ces mesures sont en fait des moyennes de ce qu'à mesuré le capteur sur 1h.
+Le dataset présente également l'évolution de la température (en degrés Farenheit), de l'humidité relative (en %) ainsi que de l'humidité absolue.
+Toutes ces données sont donc indéxées par la date et l'heure de la mesure.
+
+Un premier problème est que certaines données sont manquantes.
+On peut voir celà dans le dataset, où certaines valeurs associées à nos variables vallent -200.
+Plusieurs techniques existent pour pallier ce manque de données, dont le fait de ne pas prendre en compte les valeurs manquantes ou bien de les remplacer par la moyenne des autres valeurs.
+On effectuera cette dernière technique, qui semble mieux correspondre à l'étude des séries temporelles.
+On évitera néanmoins les variables pour lesquelles trop de données sont manquantes.
+
+```{r importation des données, include=TRUE}
+# importation des données
+air_data <- read.table("AirQualityUCI.csv",header=T,sep=";")
+
+# resize
+air_data <- air_data[2:9357,3:15]
+
+i <- c(1:length(air_data))
+
+# Remplacement des -200 par NA.
+air_data[, i] <- apply(air_data[, i], 2, function(x) (gsub(-200, NA, x)))
+
+# Comptage du nombre de NA par colonne.
+na_count <-sapply(air_data, function(y) sum(length(which(is.na(y)))))
+
+# Conversion des chaînes de caractère en nombres, en respectant la nomenclature française 
+# des nombres à virgule.
+air_data[, i] <- apply(air_data[, i], 2, 
+                       function(x) as.numeric(as.character(gsub(",", ".", x))))
+
+# Remplacement des NA par la moyenne.
+air_data[, i] <- apply(air_data[, i], 2, 
+                       function(x) replace(x, is.na(x), mean(x, na.rm = TRUE)))
+```
+
+Les données sont bien du type floatant :
+
+```{r}
+str(air_data)
+```
+
+Les NA ont bien été remplacés :
+
+```{r}
+summary(air_data)
+```
+
+Sur l'ensemble des données que l'on a, on peut voir qu'il manque beaucoup de données pour les gaz CO.GT, NMHC.GT, NOx.GT et NO2.GT avec respectivement 1683, 8444, 1640 et 1643 données manquantes sur un total de 9357 valeurs.
+On évitera ainsi de porter l'étude sur ces données.
+Pour les autres colonnes, il ne nous manque que 366 ou 367 valeurs, ce qui représente 4% des valeurs.
+Ce n'est pas parfait, mais suffisamment raisonnable pour mener l'étude.
+Ces valeurs manquantes peuvent être dues à des pannes générales du capteur, qui ont provoqué le même nombre de valeurs manquantes pour chaque colonne.
+
+```{r na_count, fig.cap="\\label{fig:na_count}NA count"}
+print(na_count)
+```
+
+Les séries que nous allons étudier sont donc les suivantes :\newline PT08.CO, C6H6.GT, PT08.NMHC, PT08.NOx, PT08.NO2 et PT08.O3.
+
+```{r}
+air_data <- air_data[, -c(1, 3, 5, 7)]
+```
+
+## Création des séries temporelles
+
+```{r}
+date1 <- strptime("03/10/2004 18:00:00", "%m/%d/%Y %H:%M:%S")
+date2 <- strptime("04/04/2005 14:00:00", "%m/%d/%Y %H:%M:%S")
+Date_air <- seq.POSIXt(date1,date2, by = "1 hour")
+
+ts_PT08.CO <- xts(air_data$PT08.S1.CO., order.by=Date_air)
+ts_C6H6.GT <- xts(air_data$C6H6.GT., order.by=Date_air)
+ts_PT08.NMHC <- xts(air_data$PT08.S2.NMHC., order.by=Date_air)
+ts_PT08.NOx <- xts(air_data$PT08.S3.NOx., order.by=Date_air)
+ts_PT08.NO2 <- xts(air_data$PT08.S4.NO2.,order.by=Date_air)
+ts_PT08.O3 <- xts(air_data$PT08.S5.O3.,order.by=Date_air)
+```
+
+# Analyse descriptive des données
+
+## Corrélation des variables observées
+
+La figure \ref{fig:figs} montre la matrice de correlation de nos variables.
+Elle montre ainsi que la température et l'humidité absolue ne sont visiblement corrélées qu'avec les émissions de NO2(GT).
+Hormis cela, aucun des trois paramètres que sont la température, l'humidité relative et l'humidité absolue ne semble être corrélés avec les concentrations de gaz mesurés dans l'air.
+Cette matrice nous montre également une forte corrélation positive entre les autres gaz, ce qui peut montrer que leur comportement est similaire.
+
+```{r figs, echo=FALSE, fig.width=4, fig.height=4, fig.align='center', fig.cap="\\label{fig:figs}Matrice de corrélation des variables observées"}
+corrplot(cor(air_data), method="color")
+```
+
+## Analyse en série temporelle
+
+```{r, include=FALSE}
+analysis<-function(data)
+{
+  print(summary(data))
+  par(mfrow=c(1,2))
+  hist(data,plot=TRUE,col="red")
+  boxplot(data,plot=TRUE,col="blue")
+}
+```
+
+```{r, include=FALSE,fig.height=2,fig.align='center'}
+# Function to show the mean of the data per month, day and hour
+mean_analysis<-function(data)
+{
+  # Mean emission per month
+  month<-as.factor(.indexmon(data))
+  mean.month<-tapply(data,month,mean)
+  
+  # Mean emission per day
+  day<-as.factor(.indexwday(data))
+  mean.day<-tapply(data,day,mean)
+  
+  # Mean emission per hour
+  hour<-as.factor(.indexhour(data))
+  mean.hour<-tapply(data,hour,mean)
+  
+  # We plot the different means on a same figure
+  par(mfrow=c(1,3))
+  
+  plot(mean.month,type='b',col="red",main="Monthly mean of emission",xlab="Month",ylab="Concentration of pollutant",pch=16)
+  plot(mean.day,type='b',col="#008B45",main="Daily mean of emission",xlab="Day",ylab="Concentration of pollutant",pch=16)
+  plot(mean.hour,type='b',col='blue',main="Hourly mean of emission",xlab="Hour",ylab="Concentration of pollutant",pch=16)
+}
+```
+
+L'observation des différentes concentration moyennes périodiques, ainsi que des séries temporelles elles-mêmes montre un comportement très similaires entre l'ensemble des gas, si ce n'est pour le Nox.GT dont le comportement varie.
+Les émissions hebdomadaires semblent ainsi inversées, avec un pic d'émissions les lundis et dimanches contre des pics d'émission en milieu de semaine pour les autres gas.
+Il en est de même pour les émissions horaires, avec plus d'émissions tôt le matin (vers 5h) contre des émissions plus présentes au milieu de la journée avec les autres gas.
+Ceci pourrait être expliqué par le fait que les émissions de ce gaz soient majoritairement dues aux émissions de transports.
+Ainsi, les livraisons des magasins par les camions transporteurs, qui se font en début de semaine et tôt le matin, peuvent expliquer ces émissions différentes.
+
+```{r PT08.CO, echo=FALSE, fig.height=2, fig.align='center', fig.cap="\\label{fig:PT08.CO} Concentrations moyennes périodiques PT08.CO"}
+mean_analysis(ts_PT08.CO)
+```
+
+```{r NOx.GT, echo=FALSE, fig.height=2, fig.align='center', fig.cap="\\label{fig:NOx.GT} Concentrations moyennes périodiques NOx.GT"}
+#mean_analysis(ts_PT08.NOx)
+```
+
+```{=tex}
+\begin{figure}
+  \centering
+  \includegraphics[height=3cm]{Nox}
+  \caption{Concentrations moyennes périodiques NOx.GT}
+\end{figure}
+```
+La plupart des gaz ayant un comportement similaire, on choisira par la suite de ne travailler que sur la série temporelle associée à la concentration de PT08.CO.
+
+```{r analyses PT08.CO, include=FALSE}
+analysis(ts_PT08.CO)
+```
+
+# Modélisation des données
+
+Pour l'analyse de la série temporelle, nous allons effectuer une décomposition de la série en tendance, saisonnalité.
+
+Avant de nous attaquer à cette décomposition, une bonne pratique dans des travaux liés au Machine Learning et aux statistiques est de normaliser les données.
+Ceci peut être utile surtout lorsque l'on souhaite comparer cette série temporelle avec d'autres séries temporelles qui ne seraient pas de la même échelle.
+
+```{r}
+X<-(air_data$PT08.S1.CO. - mean(air_data$PT08.S1.CO.))/sd(air_data$PT08.S1.CO.)
+X<-xts(X,order.by=Date_air)
+```
+
+## Tendances
+
+```{r child = 'tendances.Rmd'}
+```
+
+## Saisonnalité
+
+```{r child = 'saisonnalite.Rmd'}
+```
+
+# Prediction
+
+```{r child = 'Prediction.Rmd'}
+```
